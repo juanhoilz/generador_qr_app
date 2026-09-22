@@ -4,7 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+
 import '../../auth/views/login_screen.dart';
+import '../services/local_server_service.dart'; // Importamos el servidor local
 
 class QrScreen extends StatefulWidget {
   const QrScreen({super.key});
@@ -17,9 +19,14 @@ class _QrScreenState extends State<QrScreen> {
   String _accessToken = "";
   String _numeroEmpleado = "";
   String _qrPayload = "";
+  String _ipLocal = ""; // Guardará la IP de la tablet
+  
   Timer? _timerRotacion;
   bool _cargando = true;
   bool _offlineMode = false;
+
+  // Instanciamos el servicio del servidor
+  final LocalServerService _serverService = LocalServerService();
 
   @override
   void initState() {
@@ -29,9 +36,21 @@ class _QrScreenState extends State<QrScreen> {
 
   Future<void> _inicializarGafete() async {
     await _validarEstadoDelToken();
+    
     if (_accessToken.isNotEmpty) {
+      // 🚀 1. Encendemos el servidor local usando el token del Admin
+      _ipLocal = await _serverService.obtenerIPLocal();
+      await _serverService.iniciarServidor(_accessToken);
+
+      // 2. Dibujamos el primer código QR
       _actualizarPayloadQR();
-      // Inicia el cronómetro para cambiar el QR cada 10 segundos
+      
+      // 3. AHORA SÍ quitamos la pantalla de carga
+      setState(() {
+        _cargando = false;
+      });
+
+      // 4. Inicia el cronómetro para cambiar el QR cada 10 segundos
       _timerRotacion = Timer.periodic(const Duration(seconds: 10), (timer) {
         _actualizarPayloadQR();
       });
@@ -47,22 +66,17 @@ class _QrScreenState extends State<QrScreen> {
       _numeroEmpleado = prefs.getString('numero_empleado') ?? "Desconocido";
     });
 
-    // 1. Verificamos si el token sigue vivo localmente (Soporta Offline total)
     if (tiempoActualEpoch < expiresAt) {
-      setState(() {
-        _accessToken = prefs.getString('access_token') ?? '';
-        _cargando = false;
-        _offlineMode = true; // Asumimos offline hasta que se demuestre lo contrario
-      });
+      _accessToken = prefs.getString('access_token') ?? '';
+      _offlineMode = true; 
     } else {
-      // 2. Si expiró, intentamos consumir el refresh_token
       await _refrescarToken(prefs);
     }
   }
 
   Future<void> _refrescarToken(SharedPreferences prefs) async {
     final refreshToken = prefs.getString('refresh_token');
-    final url = Uri.parse('https://controldeasistenciastec.com/2sis/web/api/users/refresh'); // URL hipotética según tu arquitectura
+    final url = Uri.parse('https://controldeasistenciastec.com/2sis/web/api/users/refresh'); 
 
     try {
       final respuesta = await http.post(
@@ -77,26 +91,23 @@ class _QrScreenState extends State<QrScreen> {
         await prefs.setString('refresh_token', datos['refresh_token']);
         await prefs.setInt('expires_at', datos['expires_at']);
         
-        setState(() {
-          _accessToken = datos['access_token'];
-          _cargando = false;
-          _offlineMode = false;
-        });
+        _accessToken = datos['access_token'];
+        _offlineMode = false;
       } else {
         _cerrarSesionForzada('Tu sesión ha expirado. Inicia sesión nuevamente.');
       }
     } catch (e) {
-      // Sin internet y el token expiró: No podemos generar QR
       _cerrarSesionForzada('Token expirado y no hay conexión a internet para renovarlo.');
     }
   }
 
   void _actualizarPayloadQR() {
-    // Generamos un JSON con el token y el tiempo actual para forzar el cambio visual del QR
     final timestamp = DateTime.now().millisecondsSinceEpoch;
     setState(() {
+      // 🚀 4. AHORA DIBUJAMOS LA IP Y EL PUERTO EN LUGAR DEL TOKEN
       _qrPayload = json.encode({
-        'token': _accessToken,
+        'ip': _ipLocal,
+        'puerto': 8080,
         'ts': timestamp
       });
     });
@@ -104,8 +115,11 @@ class _QrScreenState extends State<QrScreen> {
 
   void _cerrarSesionForzada(String mensaje) async {
     _timerRotacion?.cancel();
+    _serverService.detenerServidor(); // Apagamos el servidor local
+    
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
+    
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(mensaje)));
       Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
@@ -115,6 +129,7 @@ class _QrScreenState extends State<QrScreen> {
   @override
   void dispose() {
     _timerRotacion?.cancel();
+    _serverService.detenerServidor(); // Apagamos el servidor local al salir
     super.dispose();
   }
 
@@ -122,7 +137,7 @@ class _QrScreenState extends State<QrScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Gafete Activo'),
+        title: const Text('Checador Activo'),
         actions: [
           IconButton(icon: const Icon(Icons.logout), onPressed: () => _cerrarSesionForzada('Sesión cerrada'))
         ],
@@ -134,10 +149,10 @@ class _QrScreenState extends State<QrScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Text(
-                    'Empleado: $_numeroEmpleado',
-                    style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
+                    'IP Red Local: $_ipLocal:8080', // Mostramos la IP en pantalla para verificar
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue),
                   ),
-                  const SizedBox(height: 40),
+                  const SizedBox(height: 20),
                   Container(
                     padding: const EdgeInsets.all(24),
                     decoration: BoxDecoration(

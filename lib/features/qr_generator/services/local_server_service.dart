@@ -67,7 +67,7 @@ class LocalServerService {
 
     // Levantamos el servidor para que escuche en todas las interfaces de red local (Wi-Fi)
     // Usamos el puerto 8080 (puedes cambiarlo si está ocupado)
-    _server = await shelf_io.serve(app, InternetAddress.anyIPv4, 8080);
+    _server = await shelf_io.serve(app.call, InternetAddress.anyIPv4, 8080);
     print('✅ Servidor de la Tablet escuchando en el puerto ${_server!.port}');
   }
 

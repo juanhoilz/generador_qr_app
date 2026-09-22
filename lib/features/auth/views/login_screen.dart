@@ -39,7 +39,7 @@ class _LoginScreenState extends State<LoginScreen> {
           return;
         }
 
-        final selfInfoUrl = Uri.parse('https://controldeasistenciastec.com/2sisc/web/api/users/self-info');
+        final selfInfoUrl = Uri.parse('https://controldeasistenciastec.com/2sis/web/api/users/self-info');
         final selfInfoRespuesta = await http.get(
           selfInfoUrl,
           headers: {
