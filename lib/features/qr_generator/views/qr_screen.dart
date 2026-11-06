@@ -1,192 +1,283 @@
 import 'dart:async';
 import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
 
+import '../../../core/session.dart';
 import '../../auth/views/login_screen.dart';
-import '../services/local_server_service.dart'; // Importamos el servidor local
+import '../../device/device_registration.dart';
+import '../services/local_server_service.dart';
 
 class QrScreen extends StatefulWidget {
   const QrScreen({super.key});
-
   @override
   State<QrScreen> createState() => _QrScreenState();
 }
 
-class _QrScreenState extends State<QrScreen> {
-  String _accessToken = "";
-  String _numeroEmpleado = "";
-  String _qrPayload = "";
-  String _ipLocal = ""; // Guardará la IP de la tablet
-  
-  Timer? _timerRotacion;
-  bool _cargando = true;
-  bool _offlineMode = false;
-
-  // Instanciamos el servicio del servidor
-  final LocalServerService _serverService = LocalServerService();
+class _QrScreenState extends State<QrScreen> with WidgetsBindingObserver {
+  SharedPreferences? _prefs;
+  DeviceRegistration? _device;
+  LocalServerService? _server;
+  Timer? _poll;
+  Timer? _rotation;
+  Future<bool>? _checking;
+  bool _busy = false;
+  bool _loading = true;
+  bool _sessionValid = false;
+  bool _allowed = false;
+  bool _leaving = false;
+  String? _error;
+  String _ip = '';
+  String _qr = '';
 
   @override
   void initState() {
     super.initState();
-    _inicializarGafete();
+    WidgetsBinding.instance.addObserver(this);
+    unawaited(_initialize());
   }
 
-  Future<void> _inicializarGafete() async {
-    await _validarEstadoDelToken();
-    
-    if (_accessToken.isNotEmpty) {
-      // 🚀 1. Encendemos el servidor local usando el token del Admin
-      _ipLocal = await _serverService.obtenerIPLocal();
-      await _serverService.iniciarServidor(_accessToken);
-
-      // 2. Dibujamos el primer código QR
-      _actualizarPayloadQR();
-      
-      // 3. AHORA SÍ quitamos la pantalla de carga
-      setState(() {
-        _cargando = false;
-      });
-
-      // 4. Inicia el cronómetro para cambiar el QR cada 10 segundos
-      _timerRotacion = Timer.periodic(const Duration(seconds: 10), (timer) {
-        _actualizarPayloadQR();
-      });
-    }
-  }
-
-  Future<void> _validarEstadoDelToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    final expiresAt = prefs.getInt('expires_at') ?? 0;
-    final int tiempoActualEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-    setState(() {
-      _numeroEmpleado = prefs.getString('numero_empleado') ?? "Desconocido";
-    });
-
-    if (tiempoActualEpoch < expiresAt) {
-      _accessToken = prefs.getString('access_token') ?? '';
-      _offlineMode = true; 
-    } else {
-      await _refrescarToken(prefs);
-    }
-  }
-
-  Future<void> _refrescarToken(SharedPreferences prefs) async {
-    final refreshToken = prefs.getString('refresh_token');
-    final url = Uri.parse('https://controldeasistenciastec.com/2sis/web/api/users/refresh'); 
-
+  Future<void> _initialize() async {
     try {
-      final respuesta = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: json.encode({'refresh_token': refreshToken}),
+      _prefs = await SharedPreferences.getInstance();
+      _device = DeviceRegistration(_prefs!);
+      await _device!.initialize();
+      if (!mounted || _leaving) return;
+      await _update();
+      if (!mounted || _leaving) return;
+      _poll = Timer.periodic(
+        const Duration(seconds: 15),
+        (_) => unawaited(_update()),
       );
+    } catch (e) {
+      _error = '$e';
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
 
-      if (respuesta.statusCode == 200) {
-        final datos = json.decode(respuesta.body);
-        await prefs.setString('access_token', datos['access_token']);
-        await prefs.setString('refresh_token', datos['refresh_token']);
-        await prefs.setInt('expires_at', datos['expires_at']);
-        
-        _accessToken = datos['access_token'];
-        _offlineMode = false;
+  Future<bool> _authorize({bool renew = false}) {
+    if (_leaving || !mounted) return Future.value(false);
+    return _checking ??= _check(renew).whenComplete(() => _checking = null);
+  }
+
+  Future<bool> _check(bool renew) async {
+    try {
+      _sessionValid = await Session.refreshIfNeeded(_prefs!);
+      if (_leaving || !mounted) return false;
+      if (_sessionValid) {
+        await _device!.refresh(
+          _prefs!.getString('access_token')!,
+          renew: renew,
+        );
       } else {
-        _cerrarSesionForzada('Tu sesión ha expirado. Inicia sesión nuevamente.');
+        _device!.offline = true;
+      }
+      _allowed = _device!.autorizado;
+      _error = null;
+    } catch (e) {
+      _allowed = false;
+      await _device!.invalidate();
+      _error = '$e';
+    }
+    if (_leaving || !mounted) return false;
+    setState(() {});
+    return _allowed;
+  }
+
+  Future<void> _update({bool renew = false}) async {
+    if (_busy || _leaving || _device == null) return;
+    setState(() => _busy = true);
+    try {
+      final allowed = await _authorize(renew: renew);
+      if (!mounted || _leaving) return;
+      if (allowed && _server == null) {
+        _ip = await LocalServerService.obtenerIPLocal();
+        if (!mounted || _leaving) return;
+        final server = LocalServerService(
+          // La comprobación remota corre cada 15 s. El teléfono solo espera 5 s;
+          // aquí se exige la aprobación ya confirmada, sin otra espera de red.
+          authorize: () async =>
+              mounted && !_leaving && _allowed && _device!.autorizado,
+          token: () => _prefs!.getString('access_token') ?? '',
+          canSend: () =>
+              _sessionValid &&
+              !_device!.offline &&
+              (_prefs!.getInt('expires_at') ?? 0) >
+                  DateTime.now().millisecondsSinceEpoch ~/ 1000,
+          uuid: _device!.uuid,
+          scope: _device!.scope,
+        );
+        _server = server;
+        try {
+          await server.iniciarServidor();
+        } catch (_) {
+          await server.detenerServidor();
+          _server = null;
+          rethrow;
+        }
+        if (!mounted || _leaving) {
+          await server.detenerServidor();
+          return;
+        }
+        _rotate();
+        _rotation = Timer.periodic(
+          const Duration(seconds: 10),
+          (_) => _rotate(),
+        );
+      } else if (!allowed) {
+        _rotation?.cancel();
+        final server = _server;
+        _server = null;
+        await server?.detenerServidor();
+        _qr = '';
       }
     } catch (e) {
-      _cerrarSesionForzada('Token expirado y no hay conexión a internet para renovarlo.');
+      _error = '$e';
+    } finally {
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  void _actualizarPayloadQR() {
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    setState(() {
-      // 🚀 4. AHORA DIBUJAMOS LA IP Y EL PUERTO EN LUGAR DEL TOKEN
-      _qrPayload = json.encode({
-        'ip': _ipLocal,
+  void _rotate() {
+    if (!mounted || _leaving) return;
+    setState(
+      () => _qr = jsonEncode({
+        'ip': _ip,
         'puerto': 8080,
-        'ts': timestamp
-      });
-    });
+        'ts': DateTime.now().millisecondsSinceEpoch,
+      }),
+    );
   }
 
-  void _cerrarSesionForzada(String mensaje) async {
-    _timerRotacion?.cancel();
-    _serverService.detenerServidor(); // Apagamos el servidor local
-    
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.clear();
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(mensaje)));
-      Navigator.pushReplacement(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
-    }
+  Future<void> _logout() async {
+    _leaving = true;
+    _poll?.cancel();
+    _rotation?.cancel();
+    await _server?.detenerServidor();
+    // Esperar las escrituras de renovación antes de limpiar la sesión.
+    await _checking;
+    if (_prefs != null) await Session.clear(_prefs!);
+    if (!mounted) return;
+    Navigator.pushReplacement(
+      context,
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+    );
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) unawaited(_update());
   }
 
   @override
   void dispose() {
-    _timerRotacion?.cancel();
-    _serverService.detenerServidor(); // Apagamos el servidor local al salir
+    _leaving = true;
+    WidgetsBinding.instance.removeObserver(this);
+    _poll?.cancel();
+    _rotation?.cancel();
+    unawaited(_server?.detenerServidor());
+    _device?.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    final device = _device;
+    final active = _allowed && _server != null && _qr.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Checador Activo'),
+        title: Text(active ? 'Checador activo' : 'Autorización de tablet'),
         actions: [
-          IconButton(icon: const Icon(Icons.logout), onPressed: () => _cerrarSesionForzada('Sesión cerrada'))
+          IconButton(icon: const Icon(Icons.logout), onPressed: _logout),
         ],
       ),
-      body: _cargando
+      body: _loading
           ? const Center(child: CircularProgressIndicator())
           : Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Text(
-                    'IP Red Local: $_ipLocal:8080', // Mostramos la IP en pantalla para verificar
-                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.blue),
-                  ),
-                  const SizedBox(height: 20),
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(20),
-                      boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 20, spreadRadius: 5)],
-                    ),
-                    child: QrImageView(
-                      data: _qrPayload,
-                      version: QrVersions.auto,
-                      size: 250.0,
-                    ),
-                  ),
-                  const SizedBox(height: 30),
-                  Row(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(24),
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 520),
+                  child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(
-                        _offlineMode ? Icons.cloud_off : Icons.cloud_done,
-                        color: _offlineMode ? Colors.orange : Colors.green,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        _offlineMode ? 'Operando sin conexión' : 'Conectado al servidor',
-                        style: TextStyle(
-                          color: _offlineMode ? Colors.orange : Colors.green,
-                          fontWeight: FontWeight.w600,
+                      if (active) ...[
+                        Text('IP Red Local: $_ip:8080'),
+                        const SizedBox(height: 20),
+                        QrImageView(
+                          data: _qr,
+                          size: 250,
+                          backgroundColor: Colors.white,
                         ),
+                        const SizedBox(height: 16),
+                        Text(
+                          device!.offline
+                              ? 'Sin conexión al servidor. Guardando localmente.'
+                              : 'Tablet aprobada y conectada',
+                        ),
+                        const Text('El QR se actualiza cada 10 segundos.'),
+                      ] else ...[
+                        const Icon(Icons.phonelink_lock, size: 64),
+                        const SizedBox(height: 16),
+                        Text(
+                          _error != null
+                              ? 'No se pudo habilitar el checador'
+                              : device?.offline == true
+                              ? 'Conecta la tablet para verificar su aprobación'
+                              : 'Estado: ${device?.estado ?? 'sin registro'}',
+                          style: Theme.of(context).textTheme.titleLarge,
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 12),
+                        const Text(
+                          'En el panel web abre Asistencias → Dispositivos móviles. '
+                          'Usa este código para aprobar la tablet. Hasta entonces no se recibirán asistencias.',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 16),
+                        SelectableText(
+                          device?.codigo ?? '',
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
+                        if (device?.venceEn != null)
+                          Text('Vigencia del código: ${device!.venceEn}'),
+                      ],
+                      const SizedBox(height: 20),
+                      if (device != null) ...[
+                        Text(device.nombre),
+                        SelectableText(
+                          'UUID: ${device.uuid}',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.all(12),
+                          child: Text(
+                            _error!,
+                            style: const TextStyle(color: Colors.red),
+                          ),
+                        ),
+                      const SizedBox(height: 12),
+                      if (_busy) const LinearProgressIndicator(),
+                      TextButton(
+                        onPressed: _busy ? null : () => _update(),
+                        child: const Text('Consultar estado'),
                       ),
+                      if (['vencido', 'rechazado'].contains(device?.estado) ||
+                          (_error != null && !active))
+                        TextButton(
+                          onPressed: _busy ? null : () => _update(renew: true),
+                          child: const Text(
+                            'Generar nuevo código y solicitar aprobación',
+                          ),
+                        ),
                     ],
                   ),
-                  const SizedBox(height: 10),
-                  const Text('El código se actualiza cada 10 segundos', style: TextStyle(color: Colors.grey)),
-                ],
+                ),
               ),
             ),
     );

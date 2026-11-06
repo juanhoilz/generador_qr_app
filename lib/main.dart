@@ -1,12 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'core/api_config.dart';
 import 'features/auth/views/login_screen.dart';
 import 'features/qr_generator/views/qr_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
-  final hasToken = prefs.getString('access_token') != null;
+  final hasToken =
+      prefs.getString('access_token') != null &&
+      prefs.getString('session_api') == ApiConfig.baseUrl &&
+      prefs.getString('device_owner') != null;
 
   runApp(MiGeneradorQR(hasToken: hasToken));
 }
@@ -22,7 +27,7 @@ class MiGeneradorQR extends StatelessWidget {
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
           seedColor: const Color(0xFF1E293B), // Tono oscuro minimalista
-          background: const Color(0xFFF8FAFC),
+          surface: const Color(0xFFF8FAFC),
         ),
         useMaterial3: true,
         inputDecorationTheme: InputDecorationTheme(
