@@ -10,6 +10,7 @@ import 'dart:convert';
 
 import '../../qr_generator/views/qr_screen.dart';
 import '../../../core/api_config.dart';
+import '../styles/login_colors.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -194,7 +195,7 @@ class _LoginScreenState extends State<LoginScreen> {
     _logLogin('ERROR: $mensaje');
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text(mensaje), backgroundColor: Colors.red),
+      SnackBar(content: Text(mensaje), backgroundColor: LoginColors.error),
     );
   }
 
@@ -239,77 +240,261 @@ class _LoginScreenState extends State<LoginScreen> {
     super.dispose();
   }
 
+  InputDecoration _decoration(String label, IconData icon) {
+    OutlineInputBorder border(Color color, [double width = 1]) =>
+        OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide(color: color, width: width),
+        );
+
+    return InputDecoration(
+      labelText: label,
+      floatingLabelBehavior: FloatingLabelBehavior.always,
+      labelStyle: const TextStyle(color: LoginColors.secondary, fontSize: 16),
+      floatingLabelStyle: const TextStyle(color: LoginColors.secondary),
+      prefixIcon: Icon(icon, color: LoginColors.secondary),
+      filled: true,
+      fillColor: LoginColors.field,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+      enabledBorder: border(LoginColors.border),
+      focusedBorder: border(LoginColors.primary, 2),
+      errorBorder: border(LoginColors.error),
+      focusedErrorBorder: border(LoginColors.error, 2),
+      errorStyle: const TextStyle(color: LoginColors.error),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(32.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(
-                Icons.qr_code_scanner,
-                size: 80,
-                color: Color(0xFF1E293B),
-              ),
-              const SizedBox(height: 40),
-              const Text(
-                'Acceso Administrativo',
-                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 30),
-              TextField(
-                controller: _emailController,
-                decoration: const InputDecoration(
-                  labelText: 'Correo electrónico',
-                  prefixIcon: Icon(Icons.email),
+      backgroundColor: LoginColors.background,
+      body: Stack(
+        children: [
+          const Positioned.fill(child: _LoginBackground()),
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) => SingleChildScrollView(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 24,
+                  vertical: 32,
                 ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: _passwordController,
-                obscureText: !_passwordVisible,
-                decoration: InputDecoration(
-                  labelText: 'Contraseña',
-                  prefixIcon: const Icon(Icons.lock),
-                  suffixIcon: IconButton(
-                    tooltip: _passwordVisible
-                        ? 'Ocultar contraseña'
-                        : 'Mostrar contraseña',
-                    icon: Icon(
-                      _passwordVisible
-                          ? Icons.visibility_off
-                          : Icons.visibility,
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    minHeight: (constraints.maxHeight - 64).clamp(
+                      0,
+                      double.infinity,
                     ),
-                    onPressed: () {
-                      setState(() => _passwordVisible = !_passwordVisible);
-                    },
                   ),
-                ),
-              ),
-              const SizedBox(height: 32),
-              _isLoading
-                  ? const CircularProgressIndicator()
-                  : SizedBox(
-                      width: double.infinity,
-                      height: 50,
-                      child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF1E293B),
-                          foregroundColor: Colors.white,
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 420),
+                      child: Container(
+                        padding: const EdgeInsets.all(24),
+                        decoration: BoxDecoration(
+                          // Superficie de cristal sin el coste de un desenfoque.
+                          color: LoginColors.field.withValues(alpha: 0.90),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(color: LoginColors.field),
+                          boxShadow: [
+                            BoxShadow(
+                              color: LoginColors.text.withValues(alpha: 0.06),
+                              blurRadius: 32,
+                              offset: const Offset(0, 12),
+                            ),
+                          ],
                         ),
-                        onPressed: _iniciarSesion,
-                        child: const Text(
-                          'Continuar',
-                          style: TextStyle(fontSize: 16),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Center(
+                              child: Container(
+                                width: 120,
+                                height: 120,
+                                decoration: BoxDecoration(
+                                  color: LoginColors.text,
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
+                                child: Image.asset(
+                                  'assets/images/iconoqrasistra.png',
+                                  fit: BoxFit.contain,
+                                  semanticLabel: 'Logo de Asistra',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            const Text(
+                              'Acceso Administrativo',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: LoginColors.text,
+                                fontSize: 28,
+                                height: 1.2,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 32),
+                            TextField(
+                              controller: _emailController,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: LoginColors.text,
+                              ),
+                              cursorColor: LoginColors.primary,
+                              decoration: _decoration(
+                                'Correo electrónico',
+                                Icons.email_outlined,
+                              ),
+                            ),
+                            const SizedBox(height: 24),
+                            TextField(
+                              controller: _passwordController,
+                              obscureText: !_passwordVisible,
+                              style: const TextStyle(
+                                fontSize: 16,
+                                color: LoginColors.text,
+                              ),
+                              cursorColor: LoginColors.primary,
+                              decoration:
+                                  _decoration(
+                                    'Contraseña',
+                                    Icons.lock_outline,
+                                  ).copyWith(
+                                    suffixIcon: IconButton(
+                                      constraints: const BoxConstraints(
+                                        minWidth: 48,
+                                        minHeight: 48,
+                                      ),
+                                      color: LoginColors.secondary,
+                                      tooltip: _passwordVisible
+                                          ? 'Ocultar contraseña'
+                                          : 'Mostrar contraseña',
+                                      icon: Icon(
+                                        _passwordVisible
+                                            ? Icons.visibility_off_outlined
+                                            : Icons.visibility_outlined,
+                                      ),
+                                      onPressed: () {
+                                        setState(
+                                          () => _passwordVisible =
+                                              !_passwordVisible,
+                                        );
+                                      },
+                                    ),
+                                  ),
+                            ),
+                            const SizedBox(height: 32),
+                            ElevatedButton(
+                              style: ButtonStyle(
+                                minimumSize: const WidgetStatePropertyAll(
+                                  Size(double.infinity, 56),
+                                ),
+                                padding: const WidgetStatePropertyAll(
+                                  EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 16,
+                                  ),
+                                ),
+                                elevation: const WidgetStatePropertyAll(0),
+                                backgroundColor:
+                                    WidgetStateProperty.resolveWith((states) {
+                                      if (states.contains(
+                                        WidgetState.disabled,
+                                      )) {
+                                        return LoginColors.secondary;
+                                      }
+                                      if (states.contains(
+                                        WidgetState.pressed,
+                                      )) {
+                                        return LoginColors.pressed;
+                                      }
+                                      return LoginColors.primary;
+                                    }),
+                                foregroundColor: const WidgetStatePropertyAll(
+                                  LoginColors.onPrimary,
+                                ),
+                                overlayColor: WidgetStatePropertyAll(
+                                  LoginColors.onPrimary.withValues(alpha: 0.12),
+                                ),
+                                side: WidgetStateProperty.resolveWith(
+                                  (states) => BorderSide(
+                                    color: states.contains(WidgetState.focused)
+                                        ? LoginColors.text
+                                        : Colors.transparent,
+                                    width: 2,
+                                  ),
+                                ),
+                                shape: WidgetStatePropertyAll(
+                                  RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(16),
+                                  ),
+                                ),
+                              ),
+                              onPressed: _isLoading ? null : _iniciarSesion,
+                              child: _isLoading
+                                  ? const SizedBox(
+                                      width: 24,
+                                      height: 24,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: LoginColors.onPrimary,
+                                        semanticsLabel: 'Iniciando sesión',
+                                      ),
+                                    )
+                                  : const Text(
+                                      'Continuar',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                            ),
+                          ],
                         ),
                       ),
                     ),
-            ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LoginBackground extends StatelessWidget {
+  const _LoginBackground();
+
+  @override
+  Widget build(BuildContext context) {
+    return const IgnorePointer(
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment.topLeft,
+            radius: 1.1,
+            colors: [LoginColors.turquoise, LoginColors.background],
+          ),
+        ),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: RadialGradient(
+              center: Alignment.bottomRight,
+              radius: 0.9,
+              colors: [LoginColors.lavender, Color(0x00EEEAF7)],
+            ),
+          ),
+          child: DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: RadialGradient(
+                center: Alignment.topRight,
+                radius: 0.7,
+                colors: [LoginColors.ice, Color(0x00EAF3FA)],
+              ),
+            ),
+            child: SizedBox.expand(),
           ),
         ),
       ),
